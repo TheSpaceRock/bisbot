@@ -1,6 +1,8 @@
 import knex_conf from '../knexfile.js';
 import knex from 'knex';
+import moment from 'moment'
 
+import { RaidRole } from './enum.js'
 import { GearInfo } from "./gear.js";
 import { Raider } from "./raider.js";
 
@@ -50,6 +52,11 @@ export class BisDb {
             .where({
                 guild_id: guild_id,
                 user_id: user_id,
+            }).then((clears) => {
+                return clears.map((x) => {
+                    x.last_clear = moment.unix(x.last_clear).utc();
+                    return x;
+                });
             });
         let slot_data = this.#knex
             .select([
@@ -74,11 +81,43 @@ export class BisDb {
         })
     }
 
+    get_raid_roles(guild_id) {
+        return this.#knex
+            .select('r.user_id')
+            .select(this.#knex.raw('IFNULL(j.role, ?) as role', [RaidRole.Unknown]))
+            .from('raiders as r')
+            .leftJoin('job_info as j', {
+                'j.job': 'r.job',
+            })
+            .where({
+                'r.guild_id': guild_id,
+            })
+            .then((rows) => {
+                let result = {};
+                for (const row of rows) {
+                    result[row.user_id] = row.role
+                }
+                return result;
+            });
+    }
+
+    can_guild_clear(guild_id, raid_id, last_weekly_reset) {
+        return this.#knex
+            .select('user_id')
+            .from('raid_clears')
+            .where({
+                guild_id: guild_id,
+                raid_id: raid_id,
+            })
+            .andWhere('last_clear', '<', last_weekly_reset.unix())
+            .then((x) => (x.length > 0));
+    }
+
     get_loot_rollers(guild_id, raid_id) {
         return this.#knex
             .select(['lt.id', 'lt.name', 'lt.gear_type', 'lt.raid_grade'])
-            .from('raid_loot').as('rl')
-            .join('loot_types lt', {'lt.id': 'rl.loot_type_id'})
+            .from('raid_loot as rl')
+            .join('loot_types as lt', {'lt.id': 'rl.loot_type_id'})
             .where({'rl.raid_id': raid_id})
             .then((drops) => {
                 return Promise.all(drops.map((drop) => {
@@ -86,46 +125,48 @@ export class BisDb {
                         .select('r.user_id')
                         .select(this.#knex.raw('IFNULL(j.role, ?) as role', [RaidRole.Unknown]))
                         .from(this.#knex.raw(`
-                            -- Select users who have this in bis
-                            (SELECT DISTINCT gs.user_id
-                            FROM gearset gs
-                            JOIN gear_slots sl
-                                ON sl.id = gs.slot_id
-                            WHERE gs.guild_id = :guild_id
-                                AND sl.loot_type_id = :lt_id
-                                AND gs.bis = :grade_id
-                                AND gs.bis != 0
-                            UNION
-                            -- Select users who can upgrade
-                            SELECT DISTINCT gs.user_id
-                            FROM gearset gs
-                            JOIN gear_slots sl
-                                ON sl.id = gs.slot_id
-                            WHERE gs.guild_id = :guild_id
-                                AND gs.current IN (
-                                    SELECT grade_from
-                                    FROM gear_upgrades
-                                    WHERE loot_type_id = :lt_id
+                            (SELECT user_id FROM
+                                -- Select users who have this in bis
+                                (SELECT DISTINCT gs.user_id
+                                FROM gearset gs
+                                JOIN gear_slots sl
+                                    ON sl.id = gs.slot_id
+                                WHERE gs.guild_id = :guild_id
+                                    AND sl.loot_type_id = :lt_id
+                                    AND gs.bis = :grade_id
+                                    AND gs.bis != 0
+                                UNION
+                                -- Select users who can upgrade
+                                SELECT DISTINCT gs.user_id
+                                FROM gearset gs
+                                JOIN gear_slots sl
+                                    ON sl.id = gs.slot_id
+                                WHERE gs.guild_id = :guild_id
+                                    AND gs.current IN (
+                                        SELECT grade_from
+                                        FROM gear_upgrades
+                                        WHERE loot_type_id = :lt_id
+                                        )
                                 )
-                            )
                             -- Exclude users who already have this gear
                             EXCEPT
-                            SELECT DISTINCT gs.user_id
-                            FROM gearset gs
-                            JOIN gear_slots sl
-                                ON sl.id = gs.slot_id
-                            WHERE gs.guild_id = :guild_id
-                                sl.loot_type_id = :lt_id
-                                AND gs.current = :grade_id
-                                AND gs.current != 0
-                            `), {
+                            SELECT user_id FROM
+                                (SELECT DISTINCT gs.user_id
+                                FROM gearset gs
+                                JOIN gear_slots sl
+                                    ON sl.id = gs.slot_id
+                                WHERE gs.guild_id = :guild_id
+                                    AND sl.loot_type_id = :lt_id
+                                    AND gs.current = :grade_id
+                                    AND gs.current != 0
+                                )
+                            ) as user_set`, {
                                 guild_id: guild_id,
                                 lt_id: drop.id,
                                 grade_id: drop.raid_grade,
-                            })
-                            .as('user_set')
-                        .join('raiders r', {'r.user_id': 'user_set.user_id'})
-                        .leftJoin('job_info j', {'j.job': 'r.job'})
+                            }))
+                        .join('raiders as r', {'r.user_id': 'user_set.user_id'})
+                        .leftJoin('job_info as j', {'j.job': 'r.job'})
                         .where({'r.guild_id': guild_id})
                         ]);
                 })).then((drops) => {
@@ -141,8 +182,8 @@ export class BisDb {
             });
     }
 
-    create_raider(guild_id, user_id) {
-        return this.#knex.transaction(async (trx) => {
+    async create_raider(guild_id, user_id) {
+        await this.#knex.transaction(async (trx) => {
             await trx.insert({
                     guild_id: guild_id,
                     user_id: user_id,
@@ -170,8 +211,8 @@ export class BisDb {
         });
     }
 
-    delete_raider(guild_id, user_id) {
-        return this.#knex.transaction(async (trx) => {
+    async delete_raider(guild_id, user_id) {
+        await this.#knex.transaction(async (trx) => {
             await trx('raiders')
                 .where({
                     guild_id: guild_id,
@@ -193,21 +234,21 @@ export class BisDb {
         });
     }
 
-    update_clear(guild_id, raid_id, clear_time, weekly_reset) {
-        return this.#knex('raid_clears')
+    async update_clear(guild_id, raid_id, clear_time, last_weekly_reset) {
+        await this.#knex('raid_clears')
             .update({
                 'books': this.#knex.raw('books + 1'),
-                'last_clear': clear_time,
+                'last_clear': clear_time.unix(),
             })
             .where({
                 guild_id: guild_id,
                 raid_id: raid_id,
             })
-            .andWhere('last_clear', '<', weekly_reset);
+            .andWhere('last_clear', '<', last_weekly_reset.unix());
     }
 
-    update_books(guild_id, user_id, raid_id, books) {
-        return this.#knex('raid_clears')
+    async update_books(guild_id, user_id, raid_id, books) {
+        await this.#knex('raid_clears')
             .update({
                 books: books,
             })
@@ -218,8 +259,8 @@ export class BisDb {
             });
     }
 
-    update_bis(guild_id, user_id, bis_url, job, bis_slots) {
-        return this.#knex.transaction(async (trx) => {
+    async update_bis(guild_id, user_id, bis_url, job, bis_slots) {
+        await this.#knex.transaction(async (trx) => {
             await trx('raiders')
                 .update({
                     bis_url: bis_url,
@@ -243,8 +284,8 @@ export class BisDb {
         });
     }
 
-    update_gear(guild_id, user_id, slots) {
-        return this.#knex.transaction(async (trx) => {
+    async update_gear(guild_id, user_id, slots) {
+        await this.#knex.transaction(async (trx) => {
             for (const slot of slots) {
                 await trx('gearset')
                     .update({
