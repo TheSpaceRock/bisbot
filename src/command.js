@@ -24,6 +24,10 @@ const CommandOptionType = Object.freeze({
     Attachment:         11,
 });
 
+const NO_MENTIONS = Object.freeze({
+    parse: [],
+})
+
 function send_ephemeral(res, msg) {
     res.send({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -76,6 +80,7 @@ async function bis_get(interaction, params) {
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
             content: `BiS for <@${params.user_id}>: ${raider.bis_url}`,
+            allowed_mentions: NO_MENTIONS,
         },
     });
 }
