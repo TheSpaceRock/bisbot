@@ -1,5 +1,6 @@
 import moment from 'moment'
-import { InteractionResponseType, InteractionResponseFlags } from "discord-interactions";
+import LRU from 'lru-cache';
+import { InteractionType, InteractionResponseType, InteractionResponseFlags } from "discord-interactions";
 import { discord_fetch, etro_parse_gearset, is_etro_gearset } from "./api.js";
 import { LootRule, resolve_loot_rollers } from "./lootrule.js";
 import { last_weekly_reset, next_weekly_reset } from "./util.js";
@@ -47,20 +48,24 @@ async function bis_set(interaction, params) {
     try {
         bis_url = new URL(interaction.data.options[0].options[0].value);
     } catch (err) {
-        return send_ephemeral(params.res, 'Only etro.gg gearsets are supported.');
+        send_ephemeral(params.res, 'Only etro.gg gearsets are supported.');
+        return;
     }
     if (!is_etro_gearset(bis_url)) {
-        return send_ephemeral(params.res, 'Only etro.gg gearsets are supported.');
+        send_ephemeral(params.res, 'Only etro.gg gearsets are supported.');
+        return;
     }
     try {
         const gear_info = await params.bis_db.get_gear_info();
         const bis = await etro_parse_gearset(bis_url, gear_info);
         console.log('check bis: ', bis.slots);
         await params.bis_db.update_bis(params.guild_id, params.user_id, bis_url, bis.job, bis.slots)
-        return send_ephemeral(params.res, `Bis set to ${bis_url} !`)
+        send_ephemeral(params.res, `Bis set to ${bis_url} !`);
+        return;
     } catch (err) {
         console.error(err);
-        return send_ephemeral(params.res, "Failed to set BiS.");
+        send_ephemeral(params.res, "Failed to set BiS.");
+        return;
     }
 }
 
@@ -80,66 +85,97 @@ async function bis_update(interaction, params) {
     if (!verify_raider(interaction, params)) return;
     const gear_info = await params.bis_db.get_gear_info();
     const raider = await params.bis_db.get_raider_data(params.guild_id, params.user_id);
-    gear_info.slots()
+    const slot_name_to_id = gear_info.slot_name_to_id();
+    const action_row = (x) => {
+        return { type: 1, components: x }
+    };
+    const gear_btn = (id) => {
+        let label;
+        if (id === 'Rings') {
+            const lcur = raider.current_gear[slot_name_to_id['Left Ring']];
+            const rcur = raider.current_gear[slot_name_to_id['Right Ring']];
+            label = `${id} (i${lcur.ilvl}/i${rcur.ilvl})`;
+        } else {
+            const current = raider.current_gear[slot_name_to_id[id]];
+            label = `${id} (i${current.ilvl})`;
+        }
+        return {
+            type: 2,
+            custom_id: id,
+            style: 1,
+            label: label,
+        };
+    };
+    const resp_type = (interaction.type === InteractionType.APPLICATION_COMMAND) ?
+        InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE : InteractionResponseType.UPDATE_MESSAGE;
+    const left_buttons = [
+        gear_btn('Head'),
+        gear_btn('Body'),
+        gear_btn('Hands'),
+        gear_btn('Legs'),
+        gear_btn('Feet'),
+    ];
+    const right_buttons = [
+        gear_btn('Weapon'),
+        gear_btn('Earrings'),
+        gear_btn('Necklace'),
+        gear_btn('Bracelets'),
+        gear_btn('Rings'),
+    ]
+    // This doesn't work because Discord isn't monospace font lmao
+    //let max_padding = left_buttons.reduce((i, x) => Math.max(i, x.label.length), 0);
+    //for (const btn of left_buttons) {
+    //    const padding = max_padding - btn.label.length;
+    //    console.log(`padding: ${padding}`);
+    //    btn.label += '\u00A0'.repeat(padding);
+    //}
     params.res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        type: resp_type,
         data: {
             content: "Select a gear slot to update:",
-            components: [{
-                type: 1,
-                components: [{
-                    custom_id: 'gear_slot',
-                    type: 3,
-                    placeholder: 'Select a gear slot',
-                    options: gear_info.slots().map((slot) => {
-                        const current = raider.current_gear[slot.id];
-                        return {
-                            label: `${slot.name} (i${current.ilvl} ${current.name})`,
-                            value: slot.id,
-                        };
-                    }),
-                }],
-            }],
+            components: left_buttons.map((x, i) => action_row([x, right_buttons[i]])),
             flags: InteractionResponseFlags.EPHEMERAL,
         },
     });
-    params.component_handler.add(interaction.id, async (interaction, params) => {
+    return async (interaction, params) => {
         const raider = await params.bis_db.get_raider_data(params.guild_id, params.user_id);
-        const selected_slot_id = parseInt(interaction.data.values[0]);
-        const current_grade = raider.current_gear[selected_slot_id].grade_id;
-        const slot_gear_type = gear_info.slots().filter((x) => x.id === selected_slot_id)[0].gear_type;
+        const slot_name = interaction.data.custom_id;
+        const gear_select_list = (slot_id) => {
+            const slot_gear_type = gear_info.slots().filter((x) => x.id === slot_id)[0].gear_type;
+            const current_grade = raider.current_gear[slot_id].grade_id;
+            return {
+                type: 1,
+                components: [{
+                    custom_id: `${slot_id}`,
+                    type: 3,
+                    options: gear_info.grades().filter((grade) => {
+                        return grade.id !== 0 && (grade.allowed_types & slot_gear_type) !== 0;
+                    }).map((grade) => {
+                        return {
+                            label: `${grade.name} (i${grade.ilvl})`,
+                            value: grade.id,
+                            default: grade.id === current_grade,
+                        };
+                    }),
+                }],
+            };
+        }
         params.res.send({
             type: InteractionResponseType.UPDATE_MESSAGE,
             data: {
-                content: "Select your gear:",
-                components: [{
-                    type: 1,
-                    components: [{
-                        custom_id: 'gear_grade',
-                        type: 3,
-                        options: gear_info.grades().filter((grade) => (grade.allowed_types & slot_gear_type) !== 0).map((grade) => {
-                            return {
-                                label: `${grade.name} (i${grade.ilvl})`,
-                                value: grade.id,
-                                default: grade.id === current_grade,
-                            };
-                        }),
-                    }],
-                }],
+                content: `Select your ${slot_name} gear:`,
+                components: ((slot_name === 'Rings') ? ['Left Ring', 'Right Ring'] : [slot_name])
+                    .map((x) => gear_select_list(slot_name_to_id[x]))
             },
         });
         return async (interaction, params) => {
+            const selected_slot_id = parseInt(interaction.data.custom_id);
             const selected_grade = parseInt(interaction.data.values[0]);
+            console.log(`Update gear: ${params.user_id} slot:${selected_slot_id} grade:${selected_grade}`)
             params.bis_db.update_gear(params.guild_id, params.user_id, [{ slot_id: selected_slot_id, grade_id: selected_grade }])
-            params.res.send({
-                type: InteractionResponseType.UPDATE_MESSAGE,
-                data: {
-                    content: "Gear updated!",
-                    components: [],
-                },
-            });
+            return bis_update(interaction, params);
         };
-    });
+    };
 }
 
 async function bis_clear(interaction, params) {
@@ -151,7 +187,7 @@ async function bis_clear(interaction, params) {
             params.res.send({
             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
             data: {
-                content: "You've all cleared this week... There's no loot to roll on.",
+                content: `You've all cleared ${target_raid_id} this week... There's no loot to roll on.`,
             },
             });
             return;
@@ -159,7 +195,7 @@ async function bis_clear(interaction, params) {
         let drops = await params.bis_db.get_loot_rollers(params.guild_id, target_raid_id);
         const roles = await params.bis_db.get_raid_roles(params.guild_id);
         drops = resolve_loot_rollers(drops, LootRule.PriorityFFA, roles);
-        let content = "Displaying loot rules:\n\n"
+        let content = `Displaying loot rules for ${target_raid_id}:\n\n`
         for (const k in drops) {
             const drop = drops[k];
             let rule_text = 'Everyone rolls Greed!'
@@ -185,10 +221,12 @@ async function bisadmin_register(interaction, params) {
     try {
         const target_user_id = interaction.data.options[0].options[0].value;
         await params.bis_db.create_raider(params.guild_id, target_user_id);
-        return send_ephemeral(params.res, `<@${target_user_id}> successfully registered!`);
+        send_ephemeral(params.res, `<@${target_user_id}> successfully registered!`);
+        return;
     } catch (err) {
         console.log(err);
-        return send_ephemeral(params.res, `Failed to register user.`)
+        send_ephemeral(params.res, `Failed to register user.`);
+        return;
     }
 }
 
@@ -196,17 +234,45 @@ async function bisadmin_unregister(interaction, params) {
     try {
         const target_user_id = interaction.data.options[0].options[0].value;
         await params.bis_db.delete_raider(params.guild_id, target_user_id);
-        return send_ephemeral(params.res, `<@${target_user_id}> successfully unregistered!`);
+        send_ephemeral(params.res, `<@${target_user_id}> successfully unregistered!`);
+        return;
     } catch (err) {
         console.log(err);
-        return send_ephemeral(params.res, 'Failed to unregister user.');
+        send_ephemeral(params.res, 'Failed to unregister user.');
+        return;
     }
+}
+
+
+async function bisadmin_loop(interaction, params) {
+    const resp_type = (interaction.type === InteractionType.APPLICATION_COMMAND) ?
+        InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE : InteractionResponseType.UPDATE_MESSAGE;
+    params.res.send({
+        type: resp_type,
+        data: {
+            content: `A simple loop!`,
+            components: [{
+                type: 1,
+                components: [{
+                    type: 2,
+                    custom_id: 'repeat',
+                    style: 1,
+                    label: 'Loop me',
+                }],
+            }],
+        },
+    })
+    return bisadmin_loop;
 }
 
 
 export class CommandRegistry {
     
-    #dispatch = {};
+    #command_handlers = {};
+    #component_handlers = new LRU({
+        max: 1000,
+        ttl: 900000,
+    });
 
     async initialize() {
         const COMMAND_LIST = Object.freeze({
@@ -264,6 +330,7 @@ export class CommandRegistry {
                 handlers: {
                     register: bisadmin_register,
                     unregister: bisadmin_unregister,
+                    loop: bisadmin_loop,
                 },
                 register_data: {
                     type: CommandType.ChatInput,
@@ -294,6 +361,11 @@ export class CommandRegistry {
                                 required: true,
                             }]
                         },
+                        {
+                            type: CommandOptionType.SubCommand,
+                            name: 'loop',
+                            description: 'Loop!',
+                        },
                     ],
                 },
             },
@@ -315,43 +387,52 @@ export class CommandRegistry {
         console.log('Got response from Discord; Mapping command IDs to handlers');
         for (const res_command of await res.json()) {
             console.log(` - register ${res_command.name} as ${res_command.id}`);
-            this.#dispatch[res_command.id] = COMMAND_LIST[res_command.name].handlers;
+            this.#command_handlers[res_command.id] = COMMAND_LIST[res_command.name].handlers;
         }
     }
 
     async dispatch(interaction, params) {
-        //console.log('to dispatch:', JSON.stringify(interaction.data, null, 2));
-        const subcommand = interaction.data.options[0].name;
-        this.#dispatch[interaction.data.id][subcommand](interaction, params);
-    }
-    
-}
-
-
-export class InteractionQueue {
-
-    #queue = {};
-
-    add(id, callback) {
-        console.log(`Add/update handler for ${id}`);
-        this.#queue[id] = callback;
-    }
-
-    remove(id) {
-        delete this.#queue[id];
-    }
-
-    async dispatch(id, interaction, params) {
-        if (id in this.#queue) {
-            let cb = await this.#queue[id](interaction, params);
-            if (cb) {
-                this.#queue[id] = cb;
+        try {
+            if (interaction.type === InteractionType.APPLICATION_COMMAND) {
+                const subcommand = interaction.data.options[0].name;
+                console.log(`Dispatch app cmd: ${interaction.data.name} ${subcommand} ${interaction.id}`)
+                params.guild_id = interaction.guild_id;
+                params.user_id = interaction.member.user.id;
+                const handler = await this.#command_handlers[interaction.data.id][subcommand](interaction, params)
+                if (handler instanceof Function) {
+                    console.log(`Set component handler: ${interaction.id}`)
+                    this.#component_handlers.set(interaction.id, handler)
+                }
+            } else if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
+                const source_id = interaction.message.interaction.id;
+                const handler = this.#component_handlers.get(source_id);
+                params.guild_id = interaction.guild_id;
+                params.user_id = interaction.member.user.id;
+                if (handler instanceof Function) {
+                    console.log(`Dispatch component: ${source_id} ${interaction.id}`)
+                    const new_handler = await handler(interaction, params);
+                    if (new_handler) {
+                        this.#component_handlers.set(source_id, new_handler);
+                    } else {
+                        this.#component_handlers.delete(source_id);
+                    }
+                } else {
+                    console.warn(`Failed to dispatch component: source ${source_id} (likely timed out)`)
+                    params.res.send({
+                        type: InteractionResponseType.UPDATE_MESSAGE,
+                        data: {
+                            content: `Error: Command timed out.`,
+                            components: [],
+                        },
+                    });
+                }
+            } else {
+                console.error(`Unknown interaction type: ${interaction.type}`)
             }
-            return true;
-        } else {
-            console.error(`I do not know about interaction ${id} -- skipping`)
-            return false;
+        } catch (err) {
+            console.error('Dispatch error: ', err)
+            console.log(JSON.stringify(interaction, null, 2));
         }
     }
-
+    
 }
