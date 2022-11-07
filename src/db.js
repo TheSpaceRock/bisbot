@@ -120,6 +120,30 @@ export class BisDb {
             });
     }
 
+    #select_raid_lockout_floors(knex, raid_id) {
+        return knex
+            .select('ri.raid_id')
+            .from('raid_info as ri')
+            .join('raid_info as ri_target', {
+                'ri_target.progression_group': 'ri.progression_group',
+            })
+            .where({'ri_target.raid_id': raid_id})
+            .andWhere({'ri.has_lockout': true})
+            .andWhere('ri.floor', '>=', knex.ref('ri_target.floor'));
+    }
+
+    #select_raider_locking_clears(knex, guild_id, user_id, raid_id) {
+        return knex
+            .select(['raid_id', 'clear_time'])
+            .from('raid_clears')
+            .where({
+                guild_id: guild_id,
+                user_id: user_id,
+            })
+            .whereIn('raid_id', this.#select_raid_lockout_floors(knex, raid_id))
+            .andWhere('clear_time', '>', last_weekly_reset().unix());
+    }
+
     can_guild_clear(guild_id, raid_id) {
         return this.#knex
             .select('user_id')
@@ -137,18 +161,13 @@ export class BisDb {
                 })
                 // Select raids of the same progression group
                 // where the floor >= the provided raid id and has lockout
-                .whereIn('raid_id', this.#knex
-                    .select('ri.raid_id')
-                    .from('raid_info as ri')
-                    .join('raid_info as ri_target', {
-                        'ri_target.progression_group': 'ri.progression_group',
-                    })
-                    .where({'ri_target.raid_id': raid_id})
-                    .andWhere({'ri.has_lockout': true})
-                    .andWhere('ri.floor', '>=', this.#knex.ref('ri_target.floor'))
-                )
+                .whereIn('raid_id', this.#select_raid_lockout_floors(this.#knex, raid_id))
                 .andWhere('clear_time', '>', last_weekly_reset().unix())
             ).then((x) => (x.length > 0));
+    }
+
+    async can_raider_clear(guild_id, user_id, raid_id) {
+        return (await this.#select_raider_locking_clears(this.#knex, guild_id, user_id, raid_id)).length === 0;
     }
 
     get_loot_rollers(guild_id, raid_id) {
@@ -270,14 +289,8 @@ export class BisDb {
     async insert_clear(guild_id, raid_id, clear_time) {
         await this.#knex.transaction(async (trx) => {
             const users = await trx.select('user_id').from('raiders').where({guild_id: guild_id});
-            const raid_info = await trx.select('has_lockout').from('raid_info').where({raid_id: raid_id});
             for (const row of users) {
-                const has_clear = raid_info[0].has_lockout && 
-                    (await trx.select('user_id').from('raid_clears').where({
-                        guild_id: guild_id,
-                        raid_id: raid_id,
-                        user_id: row.user_id,
-                    }).andWhere('clear_time', '>', last_weekly_reset().unix())).length > 0;
+                const has_clear = (await this.#select_raider_locking_clears(trx, guild_id, row.user_id, raid_id)).length > 0;
                 if (!has_clear) {
                     await trx('raid_clears').insert({
                         guild_id: guild_id,
