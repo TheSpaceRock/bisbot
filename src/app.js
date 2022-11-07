@@ -27,5 +27,5 @@ app.post('/interactions', (req, res) => {
 
 app.listen(8080, () => {
     console.log('Server is starting!');
-    cmd.initialize();
+    cmd.initialize(bis_db);
 });

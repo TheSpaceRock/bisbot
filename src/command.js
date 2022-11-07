@@ -3,7 +3,6 @@ import LRU from 'lru-cache';
 import { InteractionType, InteractionResponseType, InteractionResponseFlags } from "discord-interactions";
 import { discord_fetch, etro_parse_gearset, is_etro_gearset } from "./api.js";
 import { LootRule, resolve_loot_rollers } from "./lootrule.js";
-import { last_weekly_reset, next_weekly_reset } from "./util.js";
 
 const CommandType = Object.freeze({
     ChatInput: 1,
@@ -182,8 +181,7 @@ async function bis_clear(interaction, params) {
     if (!verify_raider(interaction, params)) return;
     try {
         const target_raid_id = interaction.data.options[0].options[0].value;
-        const weekly_reset = last_weekly_reset();
-        if (!await params.bis_db.can_guild_clear(params.guild_id, target_raid_id, weekly_reset)) {
+        if (!await params.bis_db.can_guild_clear(params.guild_id, target_raid_id)) {
             params.res.send({
             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
             data: {
@@ -195,7 +193,7 @@ async function bis_clear(interaction, params) {
         let drops = await params.bis_db.get_loot_rollers(params.guild_id, target_raid_id);
         const roles = await params.bis_db.get_raid_roles(params.guild_id);
         drops = resolve_loot_rollers(drops, LootRule.PriorityFFA, roles);
-        let content = `Displaying loot rules for ${target_raid_id}:\n\n`
+        let content = `Loot rules for ${target_raid_id}:\n\n`;
         for (const k in drops) {
             const drop = drops[k];
             let rule_text = 'Everyone rolls Greed!'
@@ -210,7 +208,7 @@ async function bis_clear(interaction, params) {
                 content: content,
             },
         });
-        params.bis_db.update_clear(params.guild_id, target_raid_id, moment().utc(), weekly_reset);
+        params.bis_db.insert_clear(params.guild_id, target_raid_id, moment().utc());
     } catch (err) {
         console.error(err);
         send_ephemeral(params.res, 'There was an error displaying loot rules!');
@@ -274,7 +272,7 @@ export class CommandRegistry {
         ttl: 900000,
     });
 
-    async initialize() {
+    async initialize(bis_db) {
         const COMMAND_LIST = Object.freeze({
             bis: {
                 handlers: {
@@ -319,8 +317,9 @@ export class CommandRegistry {
                                 name: 'raid',
                                 description: 'Floor of raid tier that was cleared',
                                 required: true,
-                                choices: ['p5s', 'p6s', 'p7s', 'p8s'].map((x) => ({name: x, value: x})),
-                                //choices: bis_db.get_raid_floors().map((x) => ({name: x, value: x})),
+                                choices: (await bis_db.get_raid_floors()).map((x) => {
+                                    return {name: x.raid_id, value: x.raid_id}
+                                }),
                             }],
                         },
                     ],

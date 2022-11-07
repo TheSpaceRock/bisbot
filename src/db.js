@@ -5,6 +5,7 @@ import moment from 'moment'
 import { RaidRole } from './enum.js'
 import { GearInfo } from "./gear.js";
 import { Raider } from "./raider.js";
+import { last_weekly_reset, next_weekly_reset } from './util.js';
 
 export class BisDb {
 
@@ -35,6 +36,12 @@ export class BisDb {
         });
     }
 
+    get_raid_floors() {
+        return this.#knex
+            .select('raid_id')
+            .from('raid_info');
+    }
+
     async get_raider_data(guild_id, user_id) {
         let basics = this.#knex
             .select(['r.guild_id', 'r.user_id', 'r.bis_url', 'r.job', 'j.role'])
@@ -46,13 +53,25 @@ export class BisDb {
                 guild_id: guild_id,
                 user_id: user_id,
             });
-        let clears = this.#knex
-            .select(['raid_id', 'books', 'last_clear'])
+        let books = this.#knex
+            .select('raid_id')
+            .count('clear_time as books')
             .from('raid_clears')
             .where({
                 guild_id: guild_id,
                 user_id: user_id,
-            }).then((clears) => {
+            })
+            .groupBy('raid_id');
+        let recent_clears = this.#knex
+            .select('raid_id')
+            .max('clear_time as last_clear')
+            .from('raid_clears')
+            .where({
+                guild_id: guild_id,
+                user_id: user_id,
+            })
+            .groupBy('raid_id')
+            .then((clears) => {
                 return clears.map((x) => {
                     x.last_clear = moment.unix(x.last_clear).utc();
                     return x;
@@ -75,9 +94,9 @@ export class BisDb {
                 guild_id: guild_id,
                 user_id: user_id,
             });
-        return Promise.all([basics, clears, slot_data]).then((x) => {
-            let [basics, clears, slot_data] = x;
-            return new Raider(basics[0], clears, slot_data);
+        return Promise.all([basics, books, recent_clears, slot_data]).then((x) => {
+            let [basics, books, recent_clears, slot_data] = x;
+            return new Raider(basics[0], books, recent_clears, slot_data);
         })
     }
 
@@ -101,16 +120,35 @@ export class BisDb {
             });
     }
 
-    can_guild_clear(guild_id, raid_id, last_weekly_reset) {
+    can_guild_clear(guild_id, raid_id) {
         return this.#knex
             .select('user_id')
-            .from('raid_clears')
+            .from('raiders')
             .where({
                 guild_id: guild_id,
-                raid_id: raid_id,
             })
-            .andWhere('last_clear', '<', last_weekly_reset.unix())
-            .then((x) => (x.length > 0));
+            // Select users missing a clear from any floors >= the raid id
+            // for the current reset.
+            .whereNotIn('user_id', this.#knex
+                .select('user_id')
+                .from('raid_clears')
+                .where({
+                    guild_id: guild_id,
+                })
+                // Select raids of the same progression group
+                // where the floor >= the provided raid id and has lockout
+                .whereIn('raid_id', this.#knex
+                    .select('ri.raid_id')
+                    .from('raid_info as ri')
+                    .join('raid_info as ri_target', {
+                        'ri_target.progression_group': 'ri.progression_group',
+                    })
+                    .where({'ri_target.raid_id': raid_id})
+                    .andWhere({'ri.has_lockout': true})
+                    .andWhere('ri.floor', '>=', this.#knex.ref('ri_target.floor'))
+                )
+                .andWhere('clear_time', '>', last_weekly_reset().unix())
+            ).then((x) => (x.length > 0));
     }
 
     get_loot_rollers(guild_id, raid_id) {
@@ -197,15 +235,6 @@ export class BisDb {
             await trx.insert(trx.raw(`
                     SELECT  :guild_id as guild_id,
                             :user_id as user_id,
-                            raid_id,
-                            0 as last_clear,
-                            0 as books
-                    FROM (SELECT DISTINCT raid_id FROM raid_loot)
-                    `, {guild_id: guild_id, user_id: user_id})
-                ).into('raid_clears');
-            await trx.insert(trx.raw(`
-                    SELECT  :guild_id as guild_id,
-                            :user_id as user_id,
                             id as slot_id,
                             0 AS current,
                             0 AS bis
@@ -238,29 +267,27 @@ export class BisDb {
         });
     }
 
-    async update_clear(guild_id, raid_id, clear_time, last_weekly_reset) {
-        await this.#knex('raid_clears')
-            .update({
-                'books': this.#knex.raw('books + 1'),
-                'last_clear': clear_time.unix(),
-            })
-            .where({
-                guild_id: guild_id,
-                raid_id: raid_id,
-            })
-            .andWhere('last_clear', '<', last_weekly_reset.unix());
-    }
-
-    async update_books(guild_id, user_id, raid_id, books) {
-        await this.#knex('raid_clears')
-            .update({
-                books: books,
-            })
-            .where({
-                guild_id: guild_id,
-                user_id: user_id,
-                raid_id: raid_id,
-            });
+    async insert_clear(guild_id, raid_id, clear_time) {
+        await this.#knex.transaction(async (trx) => {
+            const users = await trx.select('user_id').from('raiders').where({guild_id: guild_id});
+            const raid_info = await trx.select('has_lockout').from('raid_info').where({raid_id: raid_id});
+            for (const row of users) {
+                const has_clear = raid_info[0].has_lockout && 
+                    (await trx.select('user_id').from('raid_clears').where({
+                        guild_id: guild_id,
+                        raid_id: raid_id,
+                        user_id: row.user_id,
+                    }).andWhere('clear_time', '>', last_weekly_reset().unix())).length > 0;
+                if (!has_clear) {
+                    await trx('raid_clears').insert({
+                        guild_id: guild_id,
+                        raid_id: raid_id,
+                        user_id: row.user_id,
+                        clear_time: clear_time.unix(),
+                    });
+                }
+            }
+        });
     }
 
     async update_bis(guild_id, user_id, bis_url, job, bis_slots) {
