@@ -141,7 +141,10 @@ export class BisDb {
                                 FROM gearset gs
                                 JOIN gear_slots sl
                                     ON sl.id = gs.slot_id
+                                JOIN loot_types lt
+                                    ON lt.id = sl.loot_type_id
                                 WHERE gs.guild_id = :guild_id
+                                    AND lt.gear_type = :gear_type
                                     AND gs.current IN (
                                         SELECT grade_from
                                         FROM gear_upgrades
@@ -164,6 +167,7 @@ export class BisDb {
                                 guild_id: guild_id,
                                 lt_id: drop.id,
                                 grade_id: drop.raid_grade,
+                                gear_type: drop.gear_type,
                             }))
                         .join('raiders as r', {'r.user_id': 'user_set.user_id'})
                         .leftJoin('job_info as j', {'j.job': 'r.job'})
