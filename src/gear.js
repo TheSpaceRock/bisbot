@@ -16,6 +16,14 @@ export class GearInfo {
         return this.#grades;
     }
 
+    slot_name_to_id() {
+        const result = {};
+        for (const slot of this.#slots) {
+            result[slot.name] = slot.id;
+        }
+        return result;
+    }
+
     resolve_grade(hints) {
         let possible_grades = this.#grades.filter((x) => {
             return (x.allowed_types & hints.slot.gear_type) !== 0 && x.ilvl === hints.ilvl
