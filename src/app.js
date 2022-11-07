@@ -17,6 +17,7 @@ app.use(verifyKeyMiddleware(process.env.CLIENT_PUBLIC_KEY))
 
 app.post('/interactions', (req, res) => {
     const { type, data } = req.body;
+    console.log(req.body);
     if (type === InteractionType.APPLICATION_COMMAND) {
         if (data.name === 'bis') {
             return res.send({
@@ -29,19 +30,27 @@ app.post('/interactions', (req, res) => {
 
 async function register_commands() {
     try {
-        const resp = await discord_fetch(`applications/${process.env.APP_ID}/commands`, {
+        console.log('Registering bot commands');
+        const res = await discord_fetch(`applications/${process.env.APP_ID}/commands`, {
             method: 'POST',
             body: JSON.stringify({
                 name: 'bis',
                 description: 'A command',
-                type: InteractionType.APPLICATION_COMMAND,
+                type: 1,
             }),
-        }).json();
+        });
+        if (!res.ok) {
+            console.log(res.status);
+            throw new Error(JSON.stringify(await res.json()));
+        } else {
+            console.log(await res.json());
+        }
     } catch (err) {
         console.error('Error registering commands: ', err)
     }
 }
 
 app.listen(8080, () => {
-    console.log('Startup!')
+    console.log('Server is starting!');
+    register_commands();
 });

@@ -5,5 +5,5 @@ export async function discord_fetch(endpoint, options = {}) {
         'Content-Type': 'application/json',
         'Authorization': 'Bot ' + process.env.BOT_TOKEN,
     }
-    fetch('https://discord.com/api/v10/' + endpoint, options)
+    return fetch('https://discord.com/api/v10/' + endpoint, options);
 }
