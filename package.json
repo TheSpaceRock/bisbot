@@ -5,8 +5,8 @@
   "main": "src/app.js",
   "type": "module",
   "scripts": {
-    "start": "node src/app.js",
-    "dev": "nodemon src/app.js"
+    "prod": "node src/app.js --env production",
+    "dev": "nodemon -r dotenv/config src/app.js"
   },
   "author": "SpaceRock",
   "license": "ISC",

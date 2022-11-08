@@ -1,11 +1,7 @@
-import dotenv from 'dotenv';
-
 import express from 'express';
 import { verifyKeyMiddleware } from 'discord-interactions';
 import { CommandRegistry } from './command.js';
 import { BisDb } from './db.js';
-
-dotenv.config();
 
 const app = express();
 const cmd = new CommandRegistry();
