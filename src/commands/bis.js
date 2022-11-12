@@ -117,11 +117,12 @@ async function bis_get(interaction, params) {
         if (upgrade_col.value.length === 0) {
             upgrade_col.value = 'Nothing required!'
         }
+        const member = interaction.guild.members.resolve(user);
         await interaction.reply({
             embeds: [
                 new EmbedBuilder()
                 .setColor(0x0099FF)
-                .setTitle(`BiS for ${user.username} (${raider.job ?? 'Unknown Job'})`)
+                .setTitle(`BiS for ${member.displayName} (${raider.job ?? 'Unknown Job'})`)
                 .setDescription(raider.bis_url ?? 'No BiS set')
                 .addFields(
                     { name: '\u200B', value: gear_info.slots().map(x => x.name).join('\n'), inline: true },
