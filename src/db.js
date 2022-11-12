@@ -2,7 +2,7 @@ import knex_conf from '../knexfile.js';
 import knex from 'knex';
 import moment from 'moment'
 
-import { RaidRole } from './enum.js'
+import { RaidRole, GearType } from './enum.js'
 import { GearInfo } from "./gear.js";
 import { Raider } from "./raider.js";
 import { last_weekly_reset } from './util.js';
@@ -102,6 +102,69 @@ export class BisDb {
                 return null;
             }
         })
+    }
+
+    #select_raider_upgrade_to_bis(knex, guild_id, user_id) {
+        return knex
+            .select('slot_id')
+            .from('gearset')
+            .where({
+                'guild_id': guild_id,
+                'user_id': user_id,
+            })
+            .whereIn('bis', knex
+                .select('grade_to')
+                .from('gear_upgrades'));
+    }
+
+    #select_raider_slots_with_bis(knex, guild_id, user_id) {
+        return knex
+            .select('gbis.slot_id')
+            .from(knex
+                .select(['gs.slot_id', 'sl.loot_type_id', 'gs.bis'])
+                .from('gearset as gs')
+                .join('gear_slots as sl', {'sl.id': 'gs.slot_id'})
+                .where({
+                    'gs.guild_id': guild_id,
+                    'gs.user_id': user_id,
+                })
+                .as('gbis'))
+            .join(knex
+                .select(['sl.loot_type_id', 'gs.current'])
+                .from('gearset as gs')
+                .join('gear_slots as sl', {'sl.id': 'gs.slot_id'})
+                .where({
+                    'gs.guild_id': guild_id,
+                    'gs.user_id': user_id,
+                })
+                .as('gcur'),
+                {'gcur.loot_type_id': 'gbis.loot_type_id'})
+            .where({'gbis.bis': knex.ref('gcur.current')});
+    }
+
+    async get_required_upgrades(guild_id, user_id) {
+        const current_required = await this.#knex
+            .select('lt.gear_type')
+            .count('sl.id as slots')
+            .from('gear_slots as sl')
+            .join('loot_types as lt', {'lt.id': 'sl.loot_type_id'})
+            .whereNotIn('sl.id', this.#select_raider_slots_with_bis(this.#knex, guild_id, user_id))
+            .whereIn('sl.id', this.#select_raider_upgrade_to_bis(this.#knex, guild_id, user_id))
+            .groupBy('lt.gear_type');
+        const total_required = await this.#knex
+            .select('lt.gear_type')
+            .count('sl.id as slots')
+            .from('gear_slots as sl')
+            .join('loot_types as lt', {'lt.id': 'sl.loot_type_id'})
+            .whereIn('sl.id', this.#select_raider_upgrade_to_bis(this.#knex, guild_id, user_id))
+            .groupBy('lt.gear_type');
+        const result = {};
+        result[GearType.Weapon] = { current: 0, total: 0 };
+        result[GearType.Clothing] = { current: 0, total: 0 };
+        result[GearType.Accessory] = { current: 0, total: 0 };
+        total_required.forEach(x => { result[x.gear_type].total = x.slots });
+        current_required.forEach(x => { result[x.gear_type].current = x.slots });
+        return result;
     }
 
     get_raid_roles(guild_id) {

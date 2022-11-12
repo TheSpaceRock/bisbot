@@ -1,9 +1,10 @@
 import moment from 'moment';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, SelectMenuBuilder, SlashCommandBuilder } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, SelectMenuBuilder, SlashCommandBuilder } from "discord.js";
 
 import { verify_raider } from "./util.js";
 import { is_etro_gearset, etro_parse_gearset } from "../api.js";
 import { LootRule, resolve_loot_rollers } from "../lootrule.js";
+import { GearType } from '../enum.js';
 
 export default {
     name: 'bis',
@@ -49,31 +50,6 @@ export default {
                 }));
     }
 }
-//                    type: CommandType.ChatInput,
-//                    name: 'bis',
-//                    description: 'BiS Bot',
-//                    dm_permission: false,
-//                        {
-//                            type: CommandOptionType.SubCommand,
-//                            name: 'update',
-//                            description: 'Update current gear',
-//                        },
-//                        {
-//                            type: CommandOptionType.SubCommand,
-//                            name: 'clear',
-//                            description: 'Update last clear and display loot rules',
-//                            options: [{
-//                                type: CommandOptionType.String,
-//                                name: 'raid',
-//                                description: 'Floor of raid tier that was cleared',
-//                                required: true,
-//                                choices: (await bis_db.get_raid_floors()).map((x) => {
-//                                    return {name: x.raid_id, value: x.raid_id}
-//                                }),
-//                            }],
-//                        },
-//                    ],
-//                },
 
 async function bis_set(interaction, params) {
     if (!await verify_raider(interaction, params)) return;
@@ -81,38 +57,84 @@ async function bis_set(interaction, params) {
     try {
         bis_url = new URL(interaction.options.getString('bis_url'));
     } catch (err) {
-        interaction.reply({ content: 'Only etro.gg gearsets are supported.', ephemeral: true });
+        await interaction.reply({ content: 'Only etro.gg gearsets are supported.', ephemeral: true });
         return;
     }
     if (!is_etro_gearset(bis_url)) {
-        interaction.reply({ content: 'Only etro.gg gearsets are supported.', ephemeral: true });
+        await interaction.reply({ content: 'Only etro.gg gearsets are supported.', ephemeral: true });
         return;
     }
     try {
-        interaction.deferReply({ephemeral: true});
+        await interaction.deferReply({ephemeral: true});
         const gear_info = await params.bis_db.get_gear_info();
         const bis = await etro_parse_gearset(bis_url, gear_info);
         console.log('check bis: ', bis.slots);
         await params.bis_db.update_bis(interaction.guildId, interaction.user.id, bis_url, bis.job, bis.slots);
-        interaction.reply({ content: `Bis set to ${bis_url} !`, ephemeral: true });
+        await interaction.editReply({ content: `Bis set to ${bis_url} !`, ephemeral: true });
     } catch (err) {
         console.error(err);
-        interaction.reply({ content: 'Failed to set BiS.', ephemeral: true });
+        await interaction.reply({ content: 'Failed to set BiS.', ephemeral: true });
     }
 }
 
 async function bis_get(interaction, params) {
     if (!await verify_raider(interaction, params)) return;
     let user = interaction.options.getUser('raider') ?? interaction.user;
+    const gear_info = await params.bis_db.get_gear_info();
     const raider = await params.bis_db.get_raider_data(interaction.guildId, user.id);
+    const ring_slots = gear_info.slots().filter(x => x.name.includes('Ring'));
     console.log(raider);
+    function slot_info(slot, gear_key) {
+        const gear = raider[gear_key][slot.id];
+        let result = `i${gear.ilvl} ${gear.name}`;
+        if (gear_key === 'bis_gear') {
+            let has_bis = false;
+            if (slot.name.includes('Ring')) {
+                has_bis = ring_slots.some(x => raider['current_gear'][x.id].grade_id === raider['bis_gear'][slot.id].grade_id);
+            } else {
+                has_bis = raider['current_gear'][slot.id].grade_id === raider['bis_gear'][slot.id].grade_id;
+            }
+            result = ((has_bis) ? ':white_check_mark:' : ':x:') + result;
+        }
+        return result;
+    }
     if (raider !== null) {
-        interaction.reply({
-            content: `BiS for <@${user.id}>: ${raider.bis_url}`,
+        let upgrades_needed = await params.bis_db.get_required_upgrades(interaction.guildId, user.id);
+        let upgrade_rows = [
+            {name: 'Weapon', id: GearType.Weapon},
+            {name: 'Clothing', id: GearType.Clothing},
+            {name: 'Accessory', id: GearType.Accessory},
+        ];
+
+        const upgrade_col = { name: 'Upgrade Materials', value: upgrade_rows.filter(x => {
+            return upgrades_needed[x.id].total > 0;
+        }).map(x => {
+            const total = upgrades_needed[x.id].total;
+            const needed = upgrades_needed[x.id].total - upgrades_needed[x.id].current;
+            const check_or_x = (total === needed) ? ':white_check_mark:' : ':x:';
+            return `${x.name}: ${needed} of ${total} ${check_or_x}`;
+        }).join('\n'), inline: true };
+        if (upgrade_col.value.length === 0) {
+            upgrade_col.value = 'Nothing required!'
+        }
+        await interaction.reply({
+            embeds: [
+                new EmbedBuilder()
+                .setColor(0x0099FF)
+                .setTitle(`BiS for ${user.username} (${raider.job ?? 'Unknown Job'})`)
+                .setDescription(raider.bis_url ?? 'No BiS set')
+                .addFields(
+                    { name: '\u200B', value: gear_info.slots().map(x => x.name).join('\n'), inline: true },
+                    { name: 'Current', value: gear_info.slots().map(x => slot_info(x, 'current_gear')).join('\n'), inline: true },
+                    { name: 'BiS', value: gear_info.slots().map(x => slot_info(x, 'bis_gear')).join('\n'), inline: true },
+                    { name: '\u200B', value: '\u200B', inline: false },
+                    upgrade_col,
+                )
+            ],
             allowedMentions: false,
         });
     } else {
-        interaction.reply({ content: 'I do not know about this raider.', ephemeral: true })
+        await interaction.reply({ content: 'I do not know about this raider.', ephemeral: true })
     }
 }
 
@@ -216,7 +238,7 @@ async function bis_clear(interaction, params) {
     try {
         const target_raid_id = interaction.options.getString('raid');
         if (!await params.bis_db.can_guild_clear(interaction.guildId, target_raid_id)) {
-            interaction.reply({
+            await interaction.reply({
                 content: `You've all cleared ${target_raid_id} this week... There's no loot to roll on.`,
             });
             return;
@@ -232,10 +254,10 @@ async function bis_clear(interaction, params) {
             }
             content += `${drop.name}: ${rule_text}\n`;
         }
-        interaction.reply(content);
+        await interaction.reply(content);
         await params.bis_db.insert_clear(interaction.guildId, target_raid_id, moment().utc());
     } catch (err) {
         console.error(err);
-        interaction.reply({ content: 'There was an error displaying loot rules!', ephemeral: true });
+        await interaction.reply({ content: 'There was an error displaying loot rules!', ephemeral: true });
     }
 }
