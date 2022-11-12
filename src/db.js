@@ -5,7 +5,7 @@ import moment from 'moment'
 import { RaidRole } from './enum.js'
 import { GearInfo } from "./gear.js";
 import { Raider } from "./raider.js";
-import { last_weekly_reset, next_weekly_reset } from './util.js';
+import { last_weekly_reset } from './util.js';
 
 export class BisDb {
 
@@ -96,7 +96,11 @@ export class BisDb {
             });
         return Promise.all([basics, books, recent_clears, slot_data]).then((x) => {
             let [basics, books, recent_clears, slot_data] = x;
-            return new Raider(basics[0], books, recent_clears, slot_data);
+            if (basics.length === 1) {
+                return new Raider(basics[0], books, recent_clears, slot_data);
+            } else {
+                return null;
+            }
         })
     }
 

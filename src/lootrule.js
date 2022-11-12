@@ -4,7 +4,7 @@ export const LootRule = Object.freeze({
     PriorityFFA:    0,
 });
 
-export function resolve_loot_rollers(drops, loot_rule, role_map) {
+export function resolve_loot_rollers(drops, loot_rule) {
     if (loot_rule === LootRule.PriorityFFA) {
         for (const id in drops) {
             const priority_role = drops[id].rollers.reduce((r, x) => Math.min(r, x.role), RaidRole.Unknown);

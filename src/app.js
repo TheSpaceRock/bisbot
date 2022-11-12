@@ -1,27 +1,57 @@
-import express from 'express';
-import { verifyKeyMiddleware } from 'discord-interactions';
-import { CommandRegistry } from './command.js';
 import { BisDb } from './db.js';
 
-const app = express();
-const cmd = new CommandRegistry();
+import { Client, Events, REST, Routes } from 'discord.js';
+
+import cmd_bis from './commands/bis.js';
+import cmd_bisadmin from './commands/bisadmin.js';
+
 const bis_db = new BisDb();
 
-app.get('/foobar', (req, res) => {
-    res.send('foobar 2!')
-})
+const client = new Client({
+    intents: [],
+});
+client.login(process.env.BOT_TOKEN);
+const command_registry = new Map([
+    [cmd_bisadmin.name, cmd_bisadmin],
+    [cmd_bis.name, cmd_bis],
+])
 
-app.use(verifyKeyMiddleware(process.env.CLIENT_PUBLIC_KEY))
+async function register_commands() {
+    const rest = new REST({version: '10'}).setToken(process.env.BOT_TOKEN);
+    try {
+        console.log('Registering global commands');
+        const cmd_data = await Promise.all(Array.from(command_registry)
+            .map(async ([, x]) => (await x.register_data(bis_db)).toJSON()));
+        const resp = await rest.put(Routes.applicationCommands(process.env.APP_ID), { body: cmd_data });
+        console.log(`Registered ${resp.length} commands!`);
+        resp.forEach(x => console.log(`  - ${x.name}`));
+    } catch (err) {
+        console.error('Failed to register bot commands: ', err);
+    }
+}
 
-app.post('/interactions', (req, res) => {
-    const interaction = req.body;
-    cmd.dispatch(interaction, {
-        res: res,
-        bis_db: bis_db,
-    })
+client.once(Events.ClientReady, c => {
+    console.log(`Ready! Logged in as ${c.user.tag}`)
+    register_commands();
 });
 
-app.listen(process.env.LISTEN_PORT, () => {
-    console.log('Server is starting!');
-    cmd.initialize(bis_db);
+client.on(Events.InteractionCreate, async interaction => {
+    try {
+        const params = {
+            bis_db: bis_db,
+        }
+        if (interaction.isChatInputCommand()) {
+            const command = command_registry.get(interaction.commandName);
+            if (command.handler && command.handler instanceof Function) {
+                console.log(`Disptach command /${command.name}`);
+                await command.handler(interaction, params);
+            } else {
+                const subcommand = interaction.options.getSubcommand();
+                console.log(`Dispatch command /${command.name} ${subcommand}`);
+                await command.sub_handlers[subcommand](interaction, params);
+            }
+        }
+    } catch (err) {
+        console.error('Failed to handle interaction: ', err);
+    }
 });
