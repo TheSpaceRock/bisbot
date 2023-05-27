@@ -69,7 +69,7 @@ async function bis_set(interaction, params) {
         const gear_info = await params.bis_db.get_gear_info();
         const bis = await etro_parse_gearset(bis_url, gear_info);
         console.log('check bis: ', bis.slots);
-        await params.bis_db.update_bis(interaction.guildId, interaction.user.id, bis_url, bis.job, bis.slots);
+        await params.bis_db.update_bis(interaction.guildId, interaction.user.id, bis_url.href, bis.job, bis.slots);
         await interaction.editReply({ content: `Bis set to ${bis_url} !`, ephemeral: true });
     } catch (err) {
         console.error(err);
