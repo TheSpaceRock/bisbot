@@ -310,6 +310,19 @@ export class BisDb {
             });
     }
 
+    get_gear_errors(guild_id) {
+        return this.#knex
+            .select('user_id')
+            .from('gearset')
+            .where('guild_id', guild_id)
+            .andWhere((x) => {
+                x.where('current', 0)
+                .orWhere('bis', 0)
+            })
+            .orderBy('user_id')
+            .distinct();
+    }
+
     async create_raider(guild_id, user_id) {
         await this.#knex.transaction(async (trx) => {
             await trx.insert({

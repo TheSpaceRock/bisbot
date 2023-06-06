@@ -238,15 +238,23 @@ async function bis_clear(interaction, params) {
     if (!await verify_raider(interaction, params)) return;
     try {
         const target_raid_id = interaction.options.getString('raid');
+        let warnings = '';
+        let loot_rule_header = `Loot rules for ${target_raid_id}:`;
         if (!await params.bis_db.can_guild_clear(interaction.guildId, target_raid_id)) {
-            await interaction.reply({
-                content: `You've all cleared ${target_raid_id} this week... There's no loot to roll on.`,
-            });
-            return;
+            loot_rule_header = `You've already cleared ${target_raid_id} this week. Here are some loot rules anyways:`
+        }
+        let warning_raiders = await params.bis_db.get_gear_errors(interaction.guildId);
+        if (warning_raiders.length > 0) {
+            warnings += '**WARNING**: These raiders haven\'t set their gear properly, **they may be excluded from rolls** - ';
+            warnings += warning_raiders.map((x) => `<@${x.user_id}>`).join(' ');
+            warnings += '\nCheck your gear with /bis get, and update with /bis update\n'
         }
         let drops = await params.bis_db.get_loot_rollers(interaction.guildId, target_raid_id);
         drops = resolve_loot_rollers(drops, LootRule.PriorityFFA);
-        let content = `Loot rules for ${target_raid_id}:\n\n`;
+        if (warnings !== '') {
+            warnings += "\n"
+        }
+        let content = `${warnings}${loot_rule_header}\n\n`;
         for (const k in drops) {
             const drop = drops[k];
             let rule_text = 'Everyone rolls Greed!'
