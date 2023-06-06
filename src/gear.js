@@ -35,7 +35,7 @@ export class GearInfo {
         if (possible_grades.length === 1) {
             return possible_grades[0].id;
         }
-        return 0;
+        throw new Error(`Failed to resolve gear grade for: ${hints.name} i${hints.ilvl} slot_id=${hints.slot.id}`);
     }
 
 }

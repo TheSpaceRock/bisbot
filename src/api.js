@@ -39,6 +39,7 @@ export async function etro_parse_gearset(bis_url, gear_info) {
             const equip_json = await equip_res.json();
             if (!equip_res.ok) {
                 console.error('etro.gg equip error: ', JSON.stringify(equip_json, null, 2));
+                throw new Error('Failed to request equip from etro.gg');
             } else {
                 grade = gear_info.resolve_grade({
                     slot: slot,
