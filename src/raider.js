@@ -33,4 +33,11 @@ export class Raider {
         }
     }
 
+    get_tomestones_required(gear_info) {
+        let slots = gear_info.slots().map((x) => ({ slot_id: x.id, current: this.current_gear[x.id].grade_id, bis: this.bis_gear[x.id].grade_id }))
+        slots = slots.filter((x) => x.current !== x.bis && !gear_info.can_upgrade(x.slot_id, x.current, x.bis));
+        const values = slots.map((x) => gear_info.get_tomestone_value(x.slot_id, x.bis));
+        return values.reduce((sum, x) => sum + x, 0)
+    }
+
 }

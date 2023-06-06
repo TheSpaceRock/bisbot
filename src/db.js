@@ -30,9 +30,20 @@ export class BisDb {
             .select(['id', 'name', 'ilvl', 'allowed_types', 'etro_hint'])
             .from('loot_grade')
             .orderBy('ilvl', 'id');
-        return Promise.all([slots, grades]).then((x) => {
-            const [slots, grades] = x;
-            return new GearInfo(slots, grades);
+        let upgrades = this.#knex
+            .select(['gu.loot_type_id', 'gu.grade_from', 'gu.grade_to', 'lt.gear_type'])
+            .from('gear_upgrades as gu')
+            .join('loot_types as lt', {
+                'lt.id': 'gu.loot_type_id',
+            })
+            .orderBy(['grade_from', 'grade_to', 'loot_type_id']);
+        let tomes = this.#knex
+            .select(['slot_id', 'grade_id', 'value'])
+            .from('tomestone_values')
+            .orderBy(['slot_id', 'grade_id']);
+        return Promise.all([slots, grades, upgrades, tomes]).then((x) => {
+            const [slots, grades, upgrades, tomes] = x;
+            return new GearInfo(slots, grades, upgrades, tomes);
         });
     }
 

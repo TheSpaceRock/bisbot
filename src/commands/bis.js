@@ -117,6 +117,10 @@ async function bis_get(interaction, params) {
         if (upgrade_col.value.length === 0) {
             upgrade_col.value = 'Nothing required!'
         }
+        const tomestone_total = raider.get_tomestones_required(gear_info);
+        const tomestone_weeks = Math.ceil(tomestone_total / 450); 
+        const tome_check_or_x = (tomestone_total <= 0) ? ':white_check_mark:' : ':x:';
+        const tomestone_col = { name: 'Tomestones', value: `Required: ${tomestone_total} ${tome_check_or_x}\nWeeks: ${tomestone_weeks}`, inline: true };
         const member = interaction.guild.members.resolve(user);
         await interaction.reply({
             embeds: [
@@ -129,7 +133,7 @@ async function bis_get(interaction, params) {
                     { name: 'Current', value: gear_info.slots().map(x => slot_info(x, 'current_gear')).join('\n'), inline: true },
                     { name: 'BiS', value: gear_info.slots().map(x => slot_info(x, 'bis_gear')).join('\n'), inline: true },
                     { name: '\u200B', value: '\u200B', inline: false },
-                    upgrade_col,
+                    upgrade_col, tomestone_col
                 )
             ],
             allowedMentions: false,
