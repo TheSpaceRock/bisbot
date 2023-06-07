@@ -8,8 +8,18 @@ export async function discord_fetch(endpoint, options = {}) {
     return fetch('https://discord.com/api/v10/' + endpoint, options);
 }
 
-export async function etro_fetch(endpoint, options = {}) {
-    return fetch('https://etro.gg/api/' + endpoint, options);
+export async function etro_fetch(endpoint, options = {}, retry = 3) {
+    let result;
+    let idx = 0;
+    do {
+        if (idx > 0) {
+            console.log(`Retry etro request ${idx+1} of ${retry}`);
+            await (new Promise(resolve => setTimeout(resolve, 3000)));
+        }
+        result = await fetch('https://etro.gg/api/' + endpoint, options);
+        idx++;
+    } while (!result.ok && idx < retry);
+    return result;
 }
 
 
