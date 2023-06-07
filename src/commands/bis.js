@@ -73,7 +73,7 @@ async function bis_set(interaction, params) {
         await interaction.editReply({ content: `Bis set to ${bis_url} !`, ephemeral: true });
     } catch (err) {
         console.error(err);
-        await interaction.reply({ content: 'Failed to set BiS.', ephemeral: true });
+        await interaction.editReply({ content: 'Failed to set BiS.', ephemeral: true });
     }
 }
 
