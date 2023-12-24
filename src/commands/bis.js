@@ -82,19 +82,16 @@ async function bis_get(interaction, params) {
     let user = interaction.options.getUser('raider') ?? interaction.user;
     const gear_info = await params.bis_db.get_gear_info();
     const raider = await params.bis_db.get_raider_data(interaction.guildId, user.id);
-    const ring_slots = gear_info.slots().filter(x => x.name.includes('Ring'));
+    const bis_id_to_current = raider.map_slots_bis_to_current(gear_info);
     console.log(raider);
     function slot_info(slot, gear_key) {
         const gear = raider[gear_key][slot.id];
         let result = `i${gear.ilvl} ${gear.name}`;
         if (gear_key === 'bis_gear') {
-            let has_bis = false;
-            if (slot.name.includes('Ring')) {
-                has_bis = ring_slots.some(x => raider['current_gear'][x.id].grade_id === raider['bis_gear'][slot.id].grade_id);
-            } else {
-                has_bis = raider['current_gear'][slot.id].grade_id === raider['bis_gear'][slot.id].grade_id;
-            }
-            result = ((has_bis) ? ':white_check_mark:' : ':x:') + result;
+            const cur_id = bis_id_to_current[slot.id];
+            const has_bis = raider['current_gear'][cur_id].grade_id === raider['bis_gear'][slot.id].grade_id;
+            const need_upgrade = !has_bis && gear_info.can_upgrade(slot.id, raider['current_gear'][cur_id].grade_id, raider['bis_gear'][slot.id].grade_id);
+            result = ((has_bis) ? ':white_check_mark:' : ((need_upgrade) ? ':arrow_up:' : ':x:')) + result;
         }
         return result;
     }
@@ -117,10 +114,17 @@ async function bis_get(interaction, params) {
         if (upgrade_col.value.length === 0) {
             upgrade_col.value = 'Nothing required!'
         }
-        const tomestone_total = raider.get_tomestones_required(gear_info);
-        const tomestone_weeks = Math.ceil(tomestone_total / 450); 
-        const tome_check_or_x = (tomestone_total <= 0) ? ':white_check_mark:' : ':x:';
-        const tomestone_col = { name: 'Tomestones', value: `Required: ${tomestone_total} ${tome_check_or_x}\nWeeks: ${tomestone_weeks}`, inline: true };
+        const WEEKLY_TOMESTONE_CAP = 450;
+        const tomestones_required = raider.get_tomestones_required(gear_info);
+        const tomestone_weeks_total = Math.ceil(tomestones_required.total / WEEKLY_TOMESTONE_CAP);
+        const tomestone_weeks_earned = Math.ceil((tomestones_required.total - tomestones_required.current) / WEEKLY_TOMESTONE_CAP);
+        const tome_check_or_x = (tomestones_required.current <= 0) ? ':white_check_mark:' : ':x:';
+        const tomestone_col = {
+            name:   'Tomestones',
+            value:  `Earned: ${tomestones_required.total - tomestones_required.current} of ${tomestones_required.total} ${tome_check_or_x}\n`
+                    + `Weeks: ${tomestone_weeks_earned} of ${tomestone_weeks_total}`,
+            inline: true
+            };
         const member = interaction.guild.members.resolve(user);
         await interaction.reply({
             embeds: [
